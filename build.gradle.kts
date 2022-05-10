@@ -23,6 +23,8 @@ repositories {
 }
 
 dependencies {
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.2")
+    implementation("io.ktor:ktor-client-websockets:$ktor_version")
     implementation("io.ktor:ktor-server-call-logging:$ktor_version")
     implementation("io.ktor:ktor-client-cio:2.0.1")
     implementation("io.ktor:ktor-client:2.0.1")

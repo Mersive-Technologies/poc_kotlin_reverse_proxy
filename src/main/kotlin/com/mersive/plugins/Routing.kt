@@ -1,42 +1,80 @@
 package com.mersive.plugins
 
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.KotlinModule
+import com.mersive.models.TunnelHttpReq
+import com.mersive.models.TunnelHttpResp
+import com.mersive.models.TunnelMsg
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.request.prepareGet
-import io.ktor.client.statement.HttpResponse
-import io.ktor.http.contentLength
-import io.ktor.http.contentType
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
+import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
-import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.consumeEachBufferRange
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
 
 fun Application.configureRouting() {
+    val mapper = ObjectMapper().registerModule(KotlinModule())
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+
     routing {
         get("{...}") {
-            val url = "https://releases.ubuntu.com${call.request.uri}"
-            val client = HttpClient(CIO)
-            // https://releases.ubuntu.com/22.04/ubuntu-22.04-desktop-amd64.iso
-            client.prepareGet(url).execute { incomingResponse: HttpResponse ->
-                val incomingChannel: ByteReadChannel = incomingResponse.body()
-                call.respondBytesWriter(
-                    contentType = incomingResponse.contentType(),
-                    status = incomingResponse.status,
-                    contentLength = incomingResponse.contentLength(),
-                ) {
-                    incomingChannel.consumeEachBufferRange { buffer, last ->
-                        println("Writing ${buffer.asCharBuffer().length} bytes...")
-                        writeFully(buffer)
-                        true
+            val headers = mutableMapOf<String, List<String>>()
+            call.request.headers.forEach { key, list ->
+                headers.put(key, list)
+            }
+            val req = TunnelHttpReq(
+                method = call.request.httpMethod.value,
+                uri = call.request.uri,
+                headers = headers,
+            )
+            val client = HttpClient(CIO) {
+                install(WebSockets) {
+                    // Configure WebSockets
+                }
+            }
+            val httpCall = call
+            client.webSocket(method = HttpMethod.Get, host = "127.0.0.1", port = 8080) {
+                val msg = mapper.writeValueAsString(req)
+                send(Frame.Text(msg))
+                val frame = incoming.receive() as Frame.Text
+                val resp: TunnelHttpResp = mapper.readValue(frame.readText(), TunnelHttpResp::class.java)
+                httpCall.response.status(HttpStatusCode(resp.statusCode, resp.statusMsg))
+                resp.headers.forEach { e ->
+                    e.value.forEach { s ->
+                        httpCall.response.headers.append(e.key, s, false)
                     }
                 }
 
+                println("Waiting for websocket frames...")
+                httpCall.respondBytesWriter {
+                    for (frame in incoming) {
+                        println("Got frame")
+                        when (frame) {
+                            is Frame.Binary -> {
+                                println("Sending ${frame.buffer.asCharBuffer().length} bytes to HTTP client...")
+                                writeFully(frame.buffer)
+                                flush()
+                            }
+                            is Frame.Text -> {
+                                println("Unexpected text frame")
+                            }
+                        }
+                    }
+                }
             }
+            println("Closing socket...")
+            client.close()
+
         }
     }
 }
