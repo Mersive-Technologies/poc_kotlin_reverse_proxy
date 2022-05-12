@@ -10,6 +10,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -48,15 +49,21 @@ fun Application.configureRouting() {
                 send(Frame.Text(msg))
                 val frame = incoming.receive() as Frame.Text
                 val resp: TunnelHttpResp = mapper.readValue(frame.readText(), TunnelHttpResp::class.java)
-                httpCall.response.status(HttpStatusCode(resp.statusCode, resp.statusMsg))
+//                httpCall.response.status(HttpStatusCode(resp.statusCode, resp.statusMsg))
                 resp.headers.forEach { e ->
-                    e.value.forEach { s ->
-                        httpCall.response.headers.append(e.key, s, false)
+                    if(!"Content-Type".equals(e.key, true) && !"Content-Length".equals(e.key, true)) {
+                        e.value.forEach { s ->
+                            httpCall.response.headers.append(e.key, s, false)
+                        }
                     }
                 }
 
                 println("Waiting for websocket frames...")
-                httpCall.respondBytesWriter {
+                httpCall.respondBytesWriter(
+                    status = HttpStatusCode(resp.statusCode, resp.statusMsg),
+                    contentType = ContentType.parse(resp.headers["Content-Type"]!![0]),
+                    contentLength = resp.headers["Content-Length"]!![0].toLong(),
+                ) {
                     for (frame in incoming) {
                         println("Got frame")
                         when (frame) {
